@@ -62,21 +62,7 @@ ask() {
 	esac
 }
 
-# verify this checkout of the gate looks sane
-check_gate() {
-
-	[ -d "${XVM_WS}sunos" ] || err "XVM_WS \"$XVM_WS\" is not correctly set"
-	[ -n "$EMAIL" ] || err "EMAIL was not set"
-	[ -n "$EDITOR" ] || err "EDITOR was not set"
-
-	gates=$1
-
-	[ -n "$gates" ] || gates="$all_gates"
-
-	for gate in $gates; do
-		[ -d "${XVM_WS}${gate}" ] || err "dir \"${XVM_WS}${gate}\" does not exist"
-	done
-}
+. sunos/inc/check_gate.ksh
 
 prepare_cscope() {
 	if [ "$1" != "-s" ]; then
@@ -168,123 +154,6 @@ switch_isa() {
 	fi
 }
 
-check_proto() {
-	[ -d "$proto" ] || err "proto area \"$proto\" doesn't exist"
-}
- 
-# distutils doesn't support vendor-packages, hack it here
-proto_vendor_packages() {
-	check_proto
-
-	msg "fixing for vendor-packages"
-
-	pydir=$proto/usr/lib/python2.4/
-	mkdir -p $pydir/vendor-packages
-	(cd $pydir/site-packages/ && find . |
-	    cpio -dumpa $pydir/vendor-packages/)
-	rm -rf $pydir/site-packages/
-}
-
-proto_isaexec() {
-	check_proto
-
-	dir=$1
-	file=$2
-
-	mkdir -p $proto/$dir/$isaname
-	mv -f $proto/$dir/$file $proto/$dir/$isaname/$file
-	rm -f $proto/$dir/$file
-	ln -s /usr/lib/isaexec $proto/$dir/$file
-}
-
-proto_isaexec_mv() {
-	check_proto
-
-	olddir=$1
-	newdir=$2
-	file=$3
-
-	mkdir -p $proto/$newdir/$isaname
-	mv -f $proto/$olddir/$file $proto/$newdir/$isaname/$file
-	rm -f $proto/$newdir/$file
-	ln -s /usr/lib/isaexec $proto/$newdir/$file
-}
-
-proto_isalib() {
-	check_proto
-
-	dir=$1
-	file=$2
-
-	if [ "$isa" = 64 ]; then
-		mkdir -p $proto/$dir/$isaname
-		mv -f $proto/$dir/$file $proto/$dir/$isaname/$file
-	fi
-}
-
-proto_isapython() {
-	check_proto
-
-	file=$1
-	pydir="$proto/usr/lib/python2.4/site-packages"
-
-	if [ "$isa" = 64 ]; then
-		mkdir -p "$pydir/64"
-		mv -f "$pydir/$file" "$pydir/64/$file"
-	fi
-}
-
-proto_rmrf() {
-	check_proto
-
-	for arg in "$@"; do
-		rm -rf "$proto/$arg"
-	done
-}
-
-proto_rmdir() {
-	check_proto
-
-	for arg in "$@"; do
-		rmdir "$proto/$arg"
-	done
-}
-
-proto_rm() {
-	check_proto
-
-	for arg in "$@"; do
-		rm -f "$proto/$arg"
-	done
-}
-
-proto_mkdir() {
-	check_proto
-
-	for arg in "$@"; do
-		mkdir -p "$proto/$arg"
-	done
-}
-
-proto_mv() {
-	from=$1
-	to=$2
-
-	check_proto
-
-	mv -f "$proto/$from" "$proto/$to"
-}
-
-proto_mvdir() {
-	from=$1
-	to=$2
-
-	check_proto
-
-	proto_rmrf "$to"
-	mv -f "$proto/$from" "$proto/$to"
-}
-
 do_getopts() {
 	skip_prepare=""
 	incremental=""
@@ -330,3 +199,5 @@ fi
 	echo "${XVM_WS}sunos/ must exist" >&2
 	exit 1
 }
+
+. sunos/inc/proto_ops.ksh
