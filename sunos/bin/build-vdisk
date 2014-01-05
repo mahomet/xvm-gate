@@ -1,0 +1,102 @@
+#!/bin/ksh
+#
+# CDDL HEADER START
+#
+# The contents of this file are subject to the terms of the
+# Common Development and Distribution License (the "License").
+# You may not use this file except in compliance with the License.
+#
+# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL HEADER in each
+# file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+# If applicable, add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your own identifying
+# information: Portions Copyright [yyyy] [name of copyright owner]
+#
+# CDDL HEADER END
+#
+
+#
+# Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
+#
+
+set -e
+
+usage() {
+	echo "usage: build-vdisk [-s] [debug|nondebug]" >&2
+	exit 1
+}
+
+[ "$1" = "-h" ] && usage
+[ "$1" = "-?" ] && usage
+
+[ -n "$XVM_WS" -a -d "$XVM_WS/sunos/" ] || {
+	echo "XVM_WS is not set correctly" >&2
+	echo "XVM_WS/sunos/ must exist" >&2
+	exit 1
+}
+
+. $XVM_WS/sunos/inc/xvm.ksh
+
+do_getopts $*
+shift `expr $optind - 1`
+
+check_gate vdisk
+
+export gatepath="$XVM_WS/vdisk"
+
+msg "building vdisk"
+
+init_build $1
+
+scr_dest="$proto/usr/lib/xen/scripts"
+dtd_dest="$proto/usr/share/lib/xml/dtd"
+vdisk32_dest="$proto/usr/lib/xen/bin/i86"
+vdisk64_dest="$proto/usr/lib/xen/bin/amd64"
+vdiskadm32_dest="$proto/usr/sbin/i86"
+vdiskadm64_dest="$proto/usr/sbin/amd64"
+lib32_dest="$XVM_WS/proto/staging/lib"
+lib64_dest="$XVM_WS/proto/staging/lib/64"
+
+mkdir -p $scr_dest
+mkdir -p $dtd_dest
+mkdir -p $vdisk32_dest
+mkdir -p $vdisk64_dest
+mkdir -p $vdiskadm32_dest
+mkdir -p $vdiskadm64_dest
+
+cflags_common="-I$proto/usr/include"
+ldflags_common=""
+cflags_32="-m32 -DRT_ARCH_X86"
+ldflags_32="$lib32_dest/libvboxdisk.a $lib32_dest/libvdisk.a"
+cflags_64="-m64 -msave-args -DRT_ARCH_AMD64 -D__AMD64__ -DHC_ARCH_BITS=64"
+ldflags_64="$lib64_dest/libvboxdisk.a $lib64_dest/libvdisk.a"
+
+if [ -z "$1" -o "$1" = "debug" ]; then
+	cflags_32="$cflags_32 -DDEBUG"
+	cflags_64="$cflags_64 -DDEBUG"
+fi
+
+cd $XVM_WS/vdisk/src/scripts
+DEST=$scr_dest make install
+
+cd $XVM_WS/vdisk/src/dtd
+DEST=$dtd_dest make install
+
+switch_isa 32
+cd $XVM_WS/vdisk/src/cmd/vdiskadm
+DEST=$vdiskadm32_dest make clean install
+cd $XVM_WS/vdisk/src/cmd/vdisk
+DEST=$vdisk32_dest make clean install
+
+switch_isa 64
+cd $XVM_WS/vdisk/src/cmd/vdiskadm
+DEST=$vdiskadm64_dest make clean install
+cd $XVM_WS/vdisk/src/cmd/vdisk
+DEST=$vdisk64_dest make clean install
+
