@@ -1,0 +1,212 @@
+#!/bin/sh
+#
+# CDDL HEADER START
+#
+# The contents of this file are subject to the terms of the
+# Common Development and Distribution License (the "License").
+# You may not use this file except in compliance with the License.
+#
+# You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL HEADER in each
+# file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+# If applicable, add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your own identifying
+# information: Portions Copyright [yyyy] [name of copyright owner]
+#
+# CDDL HEADER END
+#
+# Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
+#
+
+. /usr/lib/xen/scripts/xpvd-misc
+
+#
+# Verify vdisk (running as 'xvm') will be able to access the rundir & device.
+#
+do_vdisk_permissions()
+{
+	owner=`ls -ld ${rundir} | awk '{ print $3; }'`
+	if [ "$owner" = "root" ]; then
+		chown xvm "${rundir}" 2>/dev/null
+		if [ $? -ne 0 ]; then
+			err "insufficient permission for \"${rundir}\"."
+			hotplug_status "error"
+			exit 1
+		fi
+	fi
+
+	vfile=$1
+	mode=$2
+
+	if [ ! -d "${vfile}" ]; then
+		do_permissions "${vfile}" "${mode}" "${domain}" "${path}"
+	else
+		if [ "${mode}" = "r" ]; then
+			op="-r"
+			name="readable"
+		else
+			op="-w"
+			name="writable"
+		fi
+
+		# set the owner of the disk to xvm. It's too much work to
+		# find and check every snapshot, etc.
+		vdiskadm prop-set -p owner=xvm "${vfile}"
+		if [ $? -ne 0 ]; then
+			err "Unable to change owner of ${vfile} to user xvm"
+			hotplug_status "error"
+			exit 1
+		fi
+
+		# if they want to write to the disk, verify it's marked
+		# as writeable
+		ro=`vdiskadm -u xvm prop-get -p readonly "${vfile}"`
+		if [ $? -ne 0 ]; then
+			err "internal error"
+			hotplug_status "error"
+			exit 1
+		fi
+		if [ "${mode}" = "w" ]; then
+			if [ "${ro}" = "true" ]; then
+				err "\"${vfile}\" is not $name: insufficient permission"
+				hotplug_status "error"
+				exit 1
+			fi
+		fi
+	fi
+}
+
+eval "$@"
+
+rundir="/var/run/vdisk"
+dev="xpvtap@${domain},${vdev}"
+devpath="/devices/xpvd/${dev}:xpvtap"
+spath="/local/domain/0/backend/tap/${domain}/${vdev}"
+
+
+case "${febe}" in
+frontend)
+	err "tap-event: BUG: frontend called"
+	hotplug_status "error"
+	exit 1
+	;;
+backend)
+	;;
+esac
+
+
+case "${action}" in
+add)
+	if [ ! -d ${rundir} ]; then
+		mkdir ${rundir}
+	fi
+	rm -f ${rundir}/${dev}
+
+	mode=`xenstore-read ${spath}/mode`
+	if [ "${mode}" = "r" ]; then
+		op="-r"
+	fi
+
+	tap=`xenstore-read ${spath}/params`
+	type=`echo ${tap} | awk -F: '{print $1}'`
+	if [ -z "${type}" ]; then
+		err "Invalid vdisk specified: \"${tap}\""
+		hotplug_status "error"
+		exit 1
+	fi
+	vfile=`echo ${tap} | awk -F: '{print $2}'`
+	if [ -z "${vfile}" ]; then
+		err "Invalid vdisk specified: \"${tap}\""
+		hotplug_status "error"
+		exit 1
+	fi
+
+	do_vdisk_permissions "${vfile}" "${mode}"
+
+	if [ ! -d "${vfile}" ]; then
+		sectors=`vdisk -q sectors -f "${vfile}"`
+		if [ $? -ne 0 ]; then
+			err "Unable to get size of \"${vfile}\""
+			hotplug_status "error"
+			exit 1
+		fi
+		info=0
+	else
+		vdiskadm -u xvm verify "${vfile}"
+		if [ $? -ne 0 ]; then
+			err "\"${vfile}\" is invalid or corrupt."
+			hotplug_status "error"
+			exit 1
+		fi
+
+		sectors=`vdiskadm -u xvm prop-get -p sectors "${vfile}"`
+
+		# info is derived from the following properties.
+		#   cdrom = 0x1
+		#   removable = 0x2
+		#   readonly = 0x4
+		info=0
+		cdrom=`vdiskadm -u xvm prop-get -p cdrom "${vfile}"`
+		if [ "${cdrom}" = "true" ]; then
+			info=`expr ${info} + 1`
+		fi
+		removable=`vdiskadm -u xvm prop-get -p removable "${vfile}"`
+		if [ "${removable}" = "true" ]; then
+			info=`expr ${info} + 2`
+		fi
+		readonly=`vdiskadm -u xvm prop-get -p readonly "${vfile}"`
+		if [ "${readonly}" = "true" ]; then
+			info=`expr ${info} + 4`
+		fi
+
+		# increment the reference count.  If we can't increment it,
+		# rw must be set to 1. This can mean a few different things.
+		# Someone could already be using the disk. Much more likely,
+		# is that the disk was never unlocked because dom0 was rebooted
+		# (or paniced) and the domain wasn't shutdown properly. Because
+		# of this, we will warn for this case and continue on. At least
+		# we will have a log of this occuring.
+		vdiskadm -u xvm ref-inc ${op} "${vfile}"
+		if [ $? -ne 0 ]; then
+			warn "\"${vfile}\" was locked. Continuing on anyway."
+		fi
+	fi
+
+	xenstore-write ${path}/sectors ${sectors}
+	xenstore-write ${path}/sector-size 512
+	xenstore-write ${path}/info ${info}
+
+	hotplug_status "connected"
+
+	opts="-f ${vfile}"
+	opts="${opts} -x ${devpath}"
+	opts="${opts} -p ${rundir}/${dev}"
+	exec ctrun vdisk ${opts}
+	;;
+
+remove)
+	if [ -f ${rundir}/${dev} ]
+	then
+		pid=`cat ${rundir}/${dev}`
+		kill -HUP ${pid}
+		rm -f ${rundir}/${dev}
+	fi
+
+	tap=`xenstore-read ${spath}/params`
+	vfile=`echo ${tap} | awk -F: '{print $2}'`
+	if [ -d "${vfile}" ]; then
+		vdiskadm -u xvm ref-dec "${vfile}"
+	fi
+
+	# don't need to remove frontend entry, if backend is running in domU
+	xenstore-rm -t `xenstore-read ${path}/frontend` > /dev/null 2>&1
+	xenstore-rm -t ${path} > /dev/null 2>&1
+	;;
+esac
+
+exit 0

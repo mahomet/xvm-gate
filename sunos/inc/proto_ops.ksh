@@ -39,7 +39,7 @@ proto_vendor_packages() {
 
 	msg "fixing for vendor-packages"
 
-	pydir=$proto/usr/lib/python2.4/
+	pydir=$proto/usr/lib/python2.6/
 	mkdir -p $pydir/vendor-packages
 	(cd $pydir/site-packages/ && find . |
 	    cpio -dumpa $pydir/vendor-packages/)
@@ -87,7 +87,7 @@ proto_isapython() {
 	check_proto
 
 	file=$1
-	pydir="$proto/usr/lib/python2.4/site-packages"
+	pydir="$proto/usr/lib/python2.6/site-packages"
 
 	if [ "$isa" = 64 ]; then
 		mkdir -p "$pydir/64"
